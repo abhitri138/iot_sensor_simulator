@@ -1,9 +1,14 @@
-# from edu.ncsu.csc591.simulator import Simulator
 import random
 from collections import deque
 from math import log
 from statistics import mean, stdev
 from math import ceil, pow
+
+
+class Event:
+    def __init__(self, st, at):
+        self.st = st
+        self.at = at
 
 
 class Simulator:
@@ -30,11 +35,11 @@ class Simulator:
         # self.nRT = nRT
         self.nRT = deque([])
         # self.nNRT = nNRT
-        self.nNRT = deque([0])
+        self.nNRT = deque([Event(self.get_service_time_NRT(), 0)])
         self.s = s
         self.rt_response_times = []
         self.nrt_response_times = []
-        self.current_event_at = -1
+        self.current_event = Event(self.get_service_time_NRT(), 0)
         self.m = m
         self.b = b
         self.nonRT_remaining = 0
@@ -43,6 +48,7 @@ class Simulator:
         self.rt_percent_list = []
         self.nrt_percent_list = []
         self.percent_idx = ceil(0.95 * b)
+        self.t_val = 2.009  # 1.677
 
     def get_inter_arrival_time_RT(self):
         return -1 * self.mean_inter_arrival_time_RT * log(self.inter_arrival_time_RT_gen.random())
@@ -58,52 +64,52 @@ class Simulator:
 
     def update_response_list_on_exit(self):
         if self.s == 1:
-            self.rt_response_times.append(self.MC - self.current_event_at)
+            self.rt_response_times.append(self.MC - self.current_event.at)
         elif self.s == 2:
-            self.nrt_response_times.append(self.MC - self.current_event_at)
+            self.nrt_response_times.append(self.MC - self.current_event.at)
 
     def rt_event_arrival(self):
         add_time = self.get_inter_arrival_time_RT()
         # self.nRT += 1
-        self.nRT.append(self.MC)
+        self.nRT.append(Event(self.get_service_time_RT(), self.MC))
         if self.s == 2:
             self.nonRT_remaining = (self.time_dict["SCL"] - self.MC)
             if self.nonRT_remaining > 0:
                 # self.nNRT += 1
-                self.nNRT.insert(0, self.current_event_at)
+                self.nNRT.insert(0, Event(self.nonRT_remaining, self.current_event.at))
         if self.s != 1:
             # self.nRT -= 1
-            self.current_event_at = self.nRT.popleft()
+            self.current_event = self.nRT.popleft()
             self.s = 1
-            self.time_dict["SCL"] = self.MC + self.get_service_time_RT()
+            self.time_dict["SCL"] = self.MC + self.current_event.st
         self.time_dict['RTCL'] += add_time
 
     def nrt_event_arrival(self):
         add_time = self.get_inter_arrival_time_NRT()
         # self.nNRT += 1
-        self.nNRT.append(self.MC)
+        self.nNRT.append(Event(self.get_service_time_NRT(), self.MC))
         if self.s == 0:
             # self.nNRT -= 1
-            self.current_event_at = self.nNRT.popleft()
+            self.current_event = self.nNRT.popleft()
             self.s = 2
-            self.time_dict["SCL"] = self.MC + self.get_service_time_NRT()
+            self.time_dict["SCL"] = self.MC + self.current_event.st
         self.time_dict['NRTCL'] += add_time
 
     def service_completion(self):
         self.update_response_list_on_exit()
         if len(self.nRT) > 0:
             # self.nRT -= 1
-            self.current_event_at = self.nRT.popleft()
+            self.current_event = self.nRT.popleft()
             self.s = 1
+            self.time_dict["SCL"] = self.MC + self.current_event.st
         elif len(self.nNRT) > 0:
-            # self.nNRT -= 1
-            self.current_event_at = self.nNRT.popleft()
+            self.current_event = self.nNRT.popleft()
             self.s = 2
             if self.nonRT_remaining > 0:
                 self.time_dict["SCL"] = self.MC + self.nonRT_remaining
                 self.nonRT_remaining = 0
             else:
-                self.time_dict["SCL"] = self.MC + self.get_service_time_NRT()
+                self.time_dict["SCL"] = self.MC + self.current_event.st
         else:
             self.s = 0
 
@@ -119,11 +125,13 @@ class Simulator:
 
     def get_rt_confidence_interval(self, mean):
         rt_sd = stdev(self.rt_mean_list)
-        return mean - 0.063029 * rt_sd / pow(len(self.rt_mean_list), 0.5), mean + 0.063029 * rt_sd / pow(len(self.rt_mean_list), 0.5)
+        return mean - self.t_val * rt_sd / pow(len(self.rt_mean_list), 0.5), mean + self.t_val * rt_sd / pow(
+            len(self.rt_mean_list), 0.5)
 
     def get_nrt_confidence_interval(self, mean):
         nrt_sd = stdev(self.nrt_mean_list)
-        return mean - 0.063029 * nrt_sd / pow(len(self.nrt_mean_list), 0.5), mean + 0.063029 * nrt_sd / pow(len(self.nrt_mean_list), 0.5)
+        return mean - self.t_val * nrt_sd / pow(len(self.nrt_mean_list), 0.5), \
+               mean + self.t_val * nrt_sd / pow(len(self.nrt_mean_list), 0.5)
 
     def run_batch(self):
         row_format = "{:>22}" * 8
@@ -172,23 +180,34 @@ class Simulator:
         for number in range(1, self.m):
             self.run_batch()
             self.process_batch()
-        print("R(RT) mean: {a}, 95th percentile:{b}, Confidence Interval:{c}".format(a=mean(self.rt_mean_list),
-                                                                                     b=mean(self.rt_percent_list),
-                                                                                     c=self.get_rt_confidence_interval(
-                                                                                         mean(self.rt_mean_list))))
-        print("R(NonRT) mean: {a}, 95th percentile:{b}, Confidence Interval:{c}".format(a=mean(self.nrt_mean_list),
-                                                                                        b=mean(self.nrt_percent_list),
-                                                                                        c=self.get_nrt_confidence_interval(
-                                                                                            mean(self.nrt_mean_list))))
+        return mean(self.rt_mean_list), mean(self.nrt_mean_list)
+
+        # print("R(RT) mean: {a}, 95th percentile:{b}, Confidence Interval:{c}".format(a=mean(self.rt_mean_list),
+        #                                                                              b=mean(self.rt_percent_list),
+        #                                                                              c=self.get_rt_confidence_interval(
+        #                                                                                  mean(self.rt_mean_list))))
+        # print("R(NonRT) mean: {a}, 95th percentile:{b}, Confidence Interval:{c}".format(a=mean(self.nrt_mean_list),
+        #                                                                                 b=mean(self.nrt_percent_list),
+        #                                                                                 c=self.get_nrt_confidence_interval(
+        #                                                                                     mean(self.nrt_mean_list))))
 
 
 if __name__ == "__main__":
-    inter_arrival_time_RT = int(input("Enter Mean Inter Arrival Time RT:"))
-    inter_arrival_time_NRT = int(input("Enter Mean Inter Arrival Time nonRT:"))
-    service_time_RT = int(input("Enter Mean Service Time RT:"))
-    service_time_NRT = int(input("Enter Mean Service Time nonRT:"))
-    m = int(input("Enter number of batches(m):"))
-    b = int(input("Enter batch size:"))
+    # inter_arrival_time_RT = int(input("Enter Mean Inter Arrival Time RT:"))
+    # inter_arrival_time_NRT = int(input("Enter Mean Inter Arrival Time nonRT:"))
+    # service_time_RT = int(input("Enter Mean Service Time RT:"))
+    # service_time_NRT = int(input("Enter Mean Service Time nonRT:"))
+    # m = int(input("Enter number of batches(m):"))
+    # b = int(input("Enter batch size:"))
+    mrt = []
+    mnrt = []
+    lnrt = []
+    inter_arrival_time_RT = 7
+    inter_arrival_time_NRT = []
+    service_time_RT = 2
+    service_time_NRT = 4
+    m = 51
+    b = 1000
 
     simulator = Simulator(inter_arrival_time_RT,
                           inter_arrival_time_NRT,
@@ -200,4 +219,14 @@ if __name__ == "__main__":
                           SCL=4,
                           b=b,
                           m=m)
-    simulator.run()
+    for i in range(10, 45, 5):
+        simulator.mean_inter_arrival_time_NRT = i
+        m1, m2 = simulator.run()
+        mrt.append(m1)
+        mnrt.append(m2)
+        lnrt.append(1/i)
+
+    print(mrt)
+    print(mnrt)
+    print(lnrt)
+
